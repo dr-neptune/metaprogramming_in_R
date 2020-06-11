@@ -1,0 +1,125 @@
+* Metaprogramming in R
+:PROPERTIES:
+:header-args: :session R-session :results output value table :colnames yes
+:END:
+
+Metaprogramming is when you write programs that manipulate other programs; in other words, you treat code as data that you can generalize, analyze, or modify. 
+
+** Chapter 1 | Anatomy of a Function
+*** Manipulating Functions
+
+There are 3 parts to a function: 
+- its formal parameters
+- its body
+- the environment its defined in
+
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x) x
+
+formals(f)
+
+body(f)
+
+environment(f)
+#+END_SRC
+*** Formals 
+
+The formal parameters are given as a list where element names are the parameter names and values are default parameters 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+g <- function(x = 1, y = 2, z = 3) `+`(`+`(x, y), z)
+
+parameters <- formals(g)
+
+for (param in names(parameters)) cat(param, " => ", "'", parameters[[param]], "'", "\n", sep = "")
+#+END_SRC
+
+for variables in the list that do not have default values, the list represents the values as the empty name. This is a special symbol that you cannot assign to, so it cannot be confused with a real value. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+g <- function(x, y, z = 3) x + y + z
+
+parameters <- formals(g)
+
+for (param in names(parameters)) cat(param, " => ", "'", parameters[[param]], "'", " (", class(parameters[[param]]), ")\n", sep = "")
+
+#+END_SRC
+
+primitive functions (those that call into the runtime system) do not have formals
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+formals(`+`)
+#+END_SRC
+*** Function Bodies 
+
+The function body is an expression. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+body(f)
+
+# multistatement function
+g <- function(x) {
+    y <- 2*x
+    z <- x**2
+    x + y + z
+}
+
+body(g)
+#+END_SRC
+
+When a function is called, R sets up an environment for it to evaluate this expression in; this environment is called the evaluation environment for the function call. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+eval(body(f), envir = list(x = 2))
+#+END_SRC
+
+you can also set x as a default parameter (making an environment) when you evaluate the expression 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x = 2) x
+
+formals(f)
+
+eval(body(f), formals(f))
+#+END_SRC
+
+Things get weirded if the default parameters refer to each other 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x = y, y = 5) x + y
+
+# both have default values, so we can call f without any arguments
+f()
+
+# we cannot evaluate it just from the formal arguments without providing values
+eval(body(f), formals(f))
+eval(body(f), { formals(f)$x <- 2; formals(f) })
+#+END_SRC
+
+Formal arguments are not evaluated when you call a function. They are transformed into promises, which are unevaluated expressions with an associated scope. 
+
+When a function is called, each formal argument is assigned a promise in the local environment of the call with the expression slot containing the actual argument (if it exists) and the environment slot containing the environment of the caller. If no actual argument for a formal argument is given in the call and there is a default expression, it is similarly assigned to the expression slot of the formal argument, but with the environment set to the local environment. 
+
+R first assigns all variables to promises, which are placeholders for values that are represented as expressions that haven't been evaluated yet. As soon as you access them, they will be evaluated and memoised. 
+
+Since all promises are unevaluated expressions, you don't have to worry about the order in which you assign the variables. As long as the variables exist when you evaluate a promose and there are no circular variables, we are fine. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# don't do this
+g <- function(x = 2*y, y = x/2) x + y
+formals(g)
+
+# you can try to make a similar setup for f where you build an env of its formals as promises. 
+fenv <- new.env()
+(parameters <- formals(f))
+
+# we can use delayedAssign to assign values to promises
+for (param in names(parameters)) delayedAssign(param, parameters[[param]], fenv, fenv)
+
+eval(body(f), fenv)
+#+END_SRC
+
+*** Function Environments 
+
+
