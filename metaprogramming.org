@@ -109,17 +109,559 @@ Since all promises are unevaluated expressions, you don't have to worry about th
 # don't do this
 g <- function(x = 2*y, y = x/2) x + y
 formals(g)
-
 # you can try to make a similar setup for f where you build an env of its formals as promises. 
 fenv <- new.env()
 (parameters <- formals(f))
-
 # we can use delayedAssign to assign values to promises
 for (param in names(parameters)) delayedAssign(param, parameters[[param]], fenv, fenv)
-
 eval(body(f), fenv)
 #+END_SRC
 
-*** Function Environments 
+*** Calling a Function 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+enclosing <- function() {
+    z <- 2
+    function(x, y = x) {
+        x + y + z
+    }
+}
+
+f <- enclosing()
+
+calling <- function() {
+    w <- 5
+    f(x = 2 * w)
+}
+
+calling()
+#+END_SRC
+
+You can try to emulate all this using explicit environments and delayedAssign to store promises. You need 3 environments since you don't need to simulate the global environment for this. You need the environment where f was defined, called defenv, the environment for the call to f, evalenv, and the environment in which f is called, callenv. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+defenv <- new.env()
+evalenv <- new.env(parent = defenv)
+callenv <- new.env()
+
+defenv$z <- 2
+callenv$w <- 5
+#+END_SRC
+
+In the evaluation environment, you set up the promises. The delayedAssign function takes two environments as arguments. The first is where the promise should be evaluated, and the second is where it should be stored. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+delayedAssign("x", 2 * w, eval.env = callenv, assign.env = evalenv)
+delayedAssign("y", x, eval.env = evalenv, assign.env = evalenv)
+#+END_SRC
+
+In the evalenv you can now evaluate f 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x, y = x) x + y + z
+
+eval(body(f), evalenv)
+#+END_SRC
+
+*** Modifying Functions 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+(f <- function(x) x)
+
+formals(f) <- list(x = 3)
+
+eval(body(f), formals(f))
+#+END_SRC
+
+Evaluating a function is not quite as simple as evaluating its body in the context of its formals. It doesn't matter that you change a function's formal arguments outside of its definition when the function is invoked. The formal arguments will still be evaluated in the context where the function was defined. 
+
+If we define a closure, we can see this in action 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+nested <- function() {
+    y <- 5
+    function(x) x
+}
+
+f <- nested()
+
+formals(f) <- list(x = quote(y))
+
+# if you call it without args, it will use its formals assignment (y)
+f()
+
+# R still evaluates promises for default parameters in scope
+y <- 2
+f()
+
+# unless you provide y as a parameter when calling f
+f(x = y)
+#+END_SRC
+
+We can also modify the body of f 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+body(f) <- 6
+f
+
+f()
+
+f(x = 12)
+
+body(f) <- 2 * y
+f()
+
+body(f) <- quote(2 * y)
+f
+
+f()
+y <- 2
+f()
+#+END_SRC
+ you can also change the environment if you want to make f use the global y 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+environment(f) <- globalenv()
+
+f()
+y <- 3
+f()
+#+END_SRC
+
+If you want to set the formals of a function to missing values (that is, you want them to be parameters without default values), then you need to use list to create arguments 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x) x + y
+
+# alist creates a pair list, which is an internal DS in R for formal arguments. 
+formals(f) <- alist(x =, y =)
+formals(f)
+
+nested <- function() {
+    y <- 5
+    function(x) x
+}
+
+f <- nested()
+
+formals(f) <- alist(x = y)
+f
+f()
+#+END_SRC
+
+*** Constructing Functions 
+
+You can also construct new functions by piecing together their components. The function to use for this is as.function. It takes an alist as input and interprets the last element in it as the new function's body and the rest as formal arguments. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- as.function(alist(x =, y = 2, x + y))
+f
+f(2)
+#+END_SRC
+
+The environment of the new function is by default the environment in which you call as.function. So to make a closure, you can just call as.function inside another function 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+nested <- function(z) {
+    as.function(alist(x =, y = z, x + y))
+}
+
+(g <- nested())
+(h <- nested(4))
+#+END_SRC
+
+You can give an environment to as.function to specify the definition scope of the new function if you do not want it to be the current environment. In the following example, you have two functions for constructing closures. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+nested <- function(z) {
+    as.function(alist(x =, y = z, x + y))
+}
+
+nested2 <- function(z) {
+    as.function(alist(x =, y = z, x + y),
+                envir = globalenv())
+}
+
+z <- -1
+
+nested(3)(1)
+
+nested2(3)(1)
+#+END_SRC
+
+** Chapter 2 | Inside a Function Call 
+
+In the previous chapter, we saw how we could get a hold of the formal parameters of a function, the body of the function, and the environment in which the function was defined. In this chapter, we examine how we can access these, and more, from inside a function while the function is being evaluated. 
+
+*** Getting the Components of the Current Function
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# sys.function gives the definition of the current function
+f <- function(x = 5) {
+    y <- 2 * x
+    sys.function()
+}
+
+f
+
+# since the function returns the definition of itself, we get the same when we evaluate it 
+f()
+
+# to get the formal parameters of a function inside a function, we can just use formals without any params
+f <- function(x, y = 2 * x) formals()
+
+params <- f(1, 2)
+
+class(params)
+
+params
+
+# the same goes for the body of the current function
+f <- function(x, y = 2 * x) {
+    z <- x - y
+    body()
+}
+
+f(2)
+
+f <- function(x, y = 2 * x) {
+    z <- x - y
+    fformals <- formals(f)
+    fbody <- body(f)
+    list(fformals, fbody)
+}
+
+f(2)
+#+END_SRC
+
+The environment function works slightly differently. If you call it without parameters, you get the current evaluating environment 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function() {
+    x <- 1
+    y <- 2
+    z <- 3
+    (function(x, y, z) 2 * sum(sum(x, y), z))
+    environment()
+}
+
+env <- f()
+
+as.list(env)
+
+# alternatively
+environment(f)
+#+END_SRC
+
+To get the equivalent of environment(f) inside f, we must get a hold of the parent of the evaluating environ,ent. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function() {
+    x <- 1; y <- 2; z <- 3;
+    parent.env(environment())
+}
+
+f()
+#+END_SRC
+
+*** Accessing Actual Function Parameters 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# see difference between formal and actual parameters
+f <- function(x = 1:3) {
+    print(formals()$x)
+    x
+}
+
+f(x = 4:6)
+#+END_SRC
+
+
+Formals gives the arg as given in the function definition, where x = 1:3. It is a promise, to be evaluated in the defining scope when you access x in the case when there are no params provided in the function call. 
+
+If you actually want the arguments passed to the current function in the form of the promises they are really represented as, you need to get a hold of them without evaluating them. 
+
+One way to get the expression that the promises represent is to use the function substitute. This function substitutes into an expression the values that the variables refer to. This means that variables are replaced by the verbatim expressions; the expressions are not evaluated before they are substituted into an expression. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x = 1:3) substitute(x)
+
+# returns formal arguments
+f()
+
+# eval after 
+eval(f())
+
+f(5 * x)
+
+f(foo + bar)
+
+# because it is not evaluated, you don't even care if it -can- be evaluated
+f(5 + "string")
+#+END_SRC
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x = 1:3, y = x) substitute(x + y)
+f()
+f(x = 4:6)
+f(y = 5 * x)
+
+# environment is not preserved in the substitution 
+x <- 5
+f(x = 5 * x)
+eval(f(x = 5 * x))
+
+g <- function(x = 1:3, y = x) x + y
+g(x = 5 * x)
+#+END_SRC
+
+A common use for substitute is to get the expression provided to a function as a string. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x) {
+    cat(deparse(substitute(x)), "==", x)
+}
+
+f(2 + x)
+f(1:4)
+#+END_SRC
+
+The actual type of the object returned by substitute depends on the expression you give the function and what the expression's variables refer to. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x) substitute(x)
+f(5)
+class(f(5))
+
+# give substitute a local variable
+f <- function(x) {
+    y <- 2 * x
+    substitute(y)
+}
+
+f(5)
+class(f(5))
+
+# if we call substitute in the global environment, it considers variables as names and does not substitute them for their values
+x <- 5
+
+class(substitute(5))
+class(substitute(x))
+
+# it will substitute variables for values if we give a function a simple type as an argument
+f <- function(x, y = x) substitute(y)
+
+f(5)
+class(f(5))
+f(5, 5)
+class(f(5, 5))
+
+# for anything more complicated, substitute returns a call object
+f <- function(x, y) substitute(x + y)
+f(5, 5)
+class(f(5, 5))
+#+END_SRC
+
+A call object refers to an unevaluated function call. These can also be manipulated. We can translate it into a list to get its componenets, and we can evaluate it to invoke the actual function call
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+my_call <- f(5, 5)
+
+as.list(my_call)
+eval(my_call)
+#+END_SRC
+
+Since substitute doesn't evaluate a call, you can create function call objects with variables you can later evaluate in different environments. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+rm(x); rm(y)
+
+my_call <- f(x, y)
+
+as.list(my_call)
+
+# x, y do not exist, so the call cannot be evaluted
+eval(my_call)
+
+# you can treat a call as a list and modify it
+(my_call <- f(5, 5))
+
+my_call[[1]] <- `-`
+eval(my_call)
+
+my_call[[2]] <- 10
+eval(my_call)
+
+# you can create call objects manually
+(my_call <- call("+", 2, 2))
+eval(my_call)
+
+# unlike substitute, args to call are evaluated when the call object is constructed
+x <- 5; y <- 2
+(my_call <- call("+", x, y))
+(my_call <- call("+", x - y, x + y))
+
+# from inside a function, you can get the call used to invoke it using match.call
+f <- function(x, y, z) {
+    match.call()
+}
+
+(my_call <- f(2, 4, sin(2 + 4)))
+as.list(my_call)
+
+g <- f
+(my_call <- g(2, 4, sin(2 + 4)))
+my_call[[1]]
+#+END_SRC
+
+*** Accessing the Calling Scope 
+
+Inside a function, expressions are evaluated in the scope defined by the evaluating environment and its parent environment, except for the promises provided in the function call, which are evaluated in the calling scope. If you want direct access to the calling environment, inside a function, you can get a hold of it using the function parent.frame
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+nested <- function(x) {
+    function(local) {
+        if (local) x
+        else get("x", parent.frame())
+    }
+}
+
+f <- nested(2)
+f(TRUE)
+x <- 1
+f(FALSE)
+#+END_SRC
+
+In a slightly more complicated version, you can try evaluating an expression either in the local evaluating environment or in the calling scope 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+nested <- function(x) {
+    y <- 2
+    function(local) {
+        z <- 2
+        expr <- expression(x + y + z)
+        if (local) eval(expr)
+        else eval(expr, envir = parent.frame())
+    }
+}
+
+f <- nested(2)
+
+x <- y <- z <- 1
+
+f(TRUE)
+f(FALSE)
+#+END_SRC
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+bind <- function(...) {
+    # get all args into a pairlist without evaluation
+    bindings <- eval(substitute(alist(...)))
+    scope <- parent.frame()
+    structure(list(bindings = bindings,
+                   scope = scope,
+                   class = "bindings"))
+}
+
+.unpack <- function(x) unname(unlist(x, use.names = FALSE))[1]
+
+`%<-%` <- function(bindings, value) {
+    var_names <- names(bindings$bindings)
+    val_names <- names(value)
+    has_names <- which(nchar(val_names) > 0)
+    value_env <- list2env(as.list(value[has_names]),
+                          parent = bindings$scope)
+
+    for (i in seq_along(bindings$bindings)) {
+        name <- var_names[i]
+        if (length(var_names) == 0 || nchar(name) == 0) {
+            variable <- bindings$bindings[[i]]
+            if (!is.name(variable)) {
+                stop(paste0("Positional variables cannot be expressions ",
+                            deparse(variable), "\n"))
+            }
+            val <- .unpack(value[i])
+            assign(as.character(variable), val, envir = bindings$scope)
+        } else {
+            assignment <- substitute(delayedAssign(name, expr,
+                                                   eval.env = value_env,
+                                                   assign.env = bindings$scope),
+                                     list(expr = bindings$bindings[[i]]))
+            eval(assignment)
+        }
+    }
+    # force evaluation of variables to get rid of the lazy promises
+    for (name in var_names) {
+        if (nchar(name) > 0) force(bindings$scope[[name]])
+    }
+}
+
+bind(x, y, z) %<-% 1:3
+x; y; z
+
+bind(y = 2 * x, z = 3 * x) %<-% c(x = 4)
+c(x, y, z)
+
+bind(y = 2 * z, z = 3 * x) %<-% c(x = 4)
+c(x, y, z)
+#+END_SRC
+
+** Chapter 3 | Expressions and Environments 
+
+This chapter digs deeper into how environments work and how you can evaluate expressions in different environments. 
+
+*** Expressions 
+
+In this chapter, we will focus on how expressions are evaluated and how we can change the scope when we evaluate an expression. 
+
+*** Chains of Linked Environments 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+search()
+
+library(MASS)
+search()
+
+# write a custom search function
+my_search <- function(env) {
+    repeat {
+        name <- environmentName(env)
+        if (nchar(name) != 0) name <- paste0(name, "\n")
+        else name <- str(env, give.attr = FALSE)
+        cat(name)
+        env <- parent.env(env)
+        if (identical(env, emptyenv())) break        
+    }
+}
+
+my_search(globalenv())
+
+get_envs <- function(s_env, env_ls = "") {
+    if (identical(s_env, emptyenv())) env_ls
+    else get_envs(parent.env(s_env),
+                  paste(env_ls, cat(environmentName(s_env), "\n")))
+}
+
+f <- function() {
+    g <- function() {
+        h <- function() {
+            function(x) x
+        }
+        h()
+    }
+    g()
+}
+
+# doesn't work due to lack of flow control for envs without names
+get_envs(environment(f()), "")
+
+# well done Thomas
+my_search(environment(f()))
+
+my_search(environment(ls))
+my_search(environment(sd))
+#+END_SRC
+
+*** Environments and Function Calls 
 
 
