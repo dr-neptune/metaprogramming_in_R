@@ -681,3 +681,18 @@ x <- 2
 i <- h(1)
 i(3)
 #+END_SRC
+
+*** Manipulating Environments 
+
+Not only can you access environments and put variables in them, but you can also modify the chain of parent environments. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function() {
+    my_env <- environment()
+    parent.env(my_env) <- parent.frame()
+    x
+}
+
+g <- function(x) f()
+g(2)
+#+END_SRC
