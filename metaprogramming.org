@@ -696,3 +696,183 @@ f <- function() {
 g <- function(x) f()
 g(2)
 #+END_SRC
+
+The main problem with doing this is that environments are mutable, so if you start modifying them in one place, it has consequences elsewhere. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function() {
+    my_env <- environment()
+    call_env <- parent.frame()
+    parent.env(my_env) <- call_env
+    y
+}
+
+g <- function(x) {
+    closure <- function(y) {
+        z <- f()
+        z + x
+    }
+    closure
+}
+
+add1 <- g(1)
+add2 <- g(2)
+
+add1(3)
+add2(4)
+
+# setting a global variable x doesn't change the behavior
+x <- 3
+add1(3)
+add2(4)
+
+# break the closure without touching any of the called functions
+f <- function() {
+    my_env <- environment()
+    call_env <- parent.frame()
+    parent.env(my_env) <- call_env
+    parent.env(call_env) <- parent.frame(2)
+    y
+}
+
+# how if we don't have a global var x, the addition functions break
+rm(x)
+
+add1(3)
+
+# even worse, if we do have x we get unexpected results
+x <- 3
+add1(3)
+add2(4)
+#+END_SRC
+
+*** Explicitly Creating Environments 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+env <- new.env()
+x <- 5
+
+exists("x", env)
+get("x", env)
+
+f <- function() {
+    x <- 7
+    new.env()
+}
+
+env2 <- f()
+get("x", env2)
+#+END_SRC
+
+You can assign variables to environments using assign or through the $<- function 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+assign("x", 3, envir = env)
+
+env$x
+
+(env$x <- 7)
+#+END_SRC
+
+All environments have a parent except the empty environment, but you can get the next best thing by making this environment the parent of your new one
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+global_x <- "foo"
+
+env <- new.env(parent = emptyenv())
+
+exists("global_x", env)
+#+END_SRC
+
+You can try to do something more interesting with manually created environments, such as building a parallel call stack you can use to implement dynamic scoping rather than lexical scoping. Lexical scoping is what we already have in R, where a function calls parent is the definition scope of the function. Dynamic scope instead has the calling environment. 
+
+Since you don't want to mess around with the actual call stack and modify parent pointers, you need to make a parallel sequence of environments, and you need to copy the content of each call stack frame into these. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+copy_env <- function(from, to) {
+    for (name in ls(from, all.names = TRUE)) assign(name, get(name, from), to)
+}
+
+# stop a little before the empty environment
+show_env <- function(env) {
+    if (!identical(env, globalenv())) {
+        print(env)
+        print(names(env))
+        show_env(parent.env(env))
+    }
+}
+#+END_SRC
+
+Now comes the function for creating the parallel sequence of environments. You can use parent.frame to get the frames on the call stack arbitrarily deep - down to the first function call - and you can get the depth of the call stack using the function sys.nframe. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+build_caller_chain <- function() {
+    n <- sys.nframe() - 1
+    env <- globalenv()
+    for (i in seq(1, n)) {
+        env <- new.env(parent = env)
+        frame <- parent.frame(n - i + 1)
+        copy_env(frame, env)
+    }
+    env
+}
+
+# see it in action 
+f <- function() {
+    x <- 1
+    function() {
+        y <- 2
+        function() {
+            z <- 3
+            print("---Enclosing Environments---")
+            show_env(environment())
+
+            call_env <- build_caller_chain()
+            print("---Calling Environments---")
+            show_env(call_env)
+        }
+    }
+}
+
+g <- f()()
+
+h <- function() {
+    x <- 4; y <- 5
+    g()
+}
+
+h()
+#+END_SRC
+
+*** Environments and Expression Evaluation 
+
+This section covers how you combine expressions and environments to compute values. All you have to do to evaluate an expression in any selected environment is to provide it to the eval function. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function() {
+    x <- 1
+    function() {
+        y <- 2
+        function() {
+            z <- 3
+
+            cat("Lexical Scope: ", x + y + z, "\n")
+
+            call_env <- build_caller_chain()
+            cat("Dynamic Scope: ", eval(quote(x + y + z), call_env), "\n")
+        }
+    }
+}
+
+g <- f()()
+
+h <- function() {
+    x <- 4; y <- 5
+    g()
+}
+
+h()
+#+END_SRC
+
+** Chapter 4 | Manipulating Environments
+
