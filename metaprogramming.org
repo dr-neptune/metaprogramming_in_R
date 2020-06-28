@@ -1123,37 +1123,457 @@ eval(simplify_expr(exp2))
 
 *** Automatic Differentiation 
 
+Interesting, but maybe another time 
+
+# #+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# d <- function(f, x) { #
+#     if (is.null(body(f))) {
+#         if (identical(f, sin)) return(cos)
+#         if (identical(f, cos)) return(- sin(x))
+#         if (identical(f, exp)) return(exp)
+#         stop("Unknown primitive")
+#     } else {
+#         df <- f
+#         e <- environment(f)
+#         body(df) <- simplify_expr(diff_expr(body(f), x, e))
+#         df
+#     }
+# }
+
+# diff_expr <- function(expr, x, e) {
+#     if (is.numeric(expr)) quote(0)
+#     else if (is.name(expr)) {
+#         if (expr == x) quote(1)
+#         else quote(0)
+#     } else if (is.call(expr)) diff_call(expr, x, e)
+#     else stop(paste0("Unexpected expression ", deparse(expr), "in parsing."))
+# }
+
+# .built_in_functions <- c("sin", "cos", "exp")
+
+# diff_call <- function(expr, x, e) {
+#     if (is.name(expr[[1]])) {
+#         if (expr[[1]] == as.name("+"))
+#             return(diff_addition(expr[[2]], expr[[3]], x, e))
+#         if (expr[[1]])
+#     }
+# #+END_SRC
+
+** Chapter 5 | Working with Substitutions
+
+*** A Little More on Quotes 
+
+The bquote function allows you to create expressions where you only partially quote -- you can evaluate some values when you create the expression and leave the other parts for later. 
+
 #+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
-d <- function(f, x) {
-    if (is.null(body(f))) {
-        if (identical(f, sin)) return(cos)
-        if (identical(f, cos)) return(- sin(x))
-        if (identical(f, exp)) return(exp)
-        stop("Unknown primitive")
-    } else {
-        df <- f
-        e <- environment(f)
-        body(df) <- simplify_expr(diff_expr(body(f), x, e))
-        df
-    }
-}
+quote(x + y)
+bquote(x + y)
+bquote(.(2 + 2) + y)
+#+END_SRC 
 
-diff_expr <- function(expr, x, e) {
-    if (is.numeric(expr)) quote(0)
-    else if (is.name(expr)) {
-        if (expr == x) quote(1)
-        else quote(0)
-    } else if (is.call(expr)) diff_call(expr, x, e)
-    else stop(paste0("Unexpected expression ", deparse(expr), "in parsing."))
-}
+In many situations where you need to create a call object, using bquote can be much simpler than constructing the call object explicitly. 
 
-.built_in_functions <- c("sin", "cos", "exp")
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# not a big diff for small examples
+bquote(.(2 + 2) + y)
+call("+", 2+2, quote(y))
 
-diff_call <- function(expr, x, e) {
-    if (is.name(expr[[1]])) {
-        if (expr[[1]] == as.name("+"))
-            return(diff_addition(expr[[2]], expr[[3]], x, e))
-        if (expr[[1]])
-    }
-
+# useful for nesting
+bquote((.(2 + 2) + x) * y)
+call("*", call("(", call("+", 2 + 2, quote(x))), quote(y))
 #+END_SRC
+
+*** Parsing and Deparsing 
+
+You can also work with expressions as strings and translate between strings and expressions using the functions parse and deparse. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# to string
+deparse(quote(x + y))
+
+# take string and return expression
+parse(text = "x + y")
+
+# get actual expressions
+(expr <- parse(text = "x + y; z * x"))
+expr[[1]]
+expr[[2]]
+
+f <- function(x) deparse(x)
+g <- function(x) deparse(substitute(x))
+x <- 1:4; y <- x**2
+
+f(x + y)
+g(x + y)
+#+END_SRC
+
+*** Substitution 
+
+The substitute function replaces variables for values in an expression. Getting the expression used as a function argument, rather than the value of the expression, is a common use of substitute. Together with deparse, it is used to create labels for plots. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# substitute doesn't get modified in the global environment
+x <- 2; y <- 3
+substitute(x + y)
+
+f <- function(x, y) substitute(x + y)
+f(2, 3)
+
+g <- function(x) function(y) substitute(x + y)
+h <- g(2)
+h(3)
+#+END_SRC
+
+When substitute looks in an environment, it does not follow the parent pointer. If it doesn't find the variable to substitute in the exact environment in which it is called, it will not look further. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# we can provide environments to substitute for it to look in
+e <- new.env(parent = emptyenv())
+e$x <- 2; e$y <- 3
+
+substitute(x + y, e)
+substitute(x + y, list(x = 2, y = 3))
+substitute(x + y, list(x = 2, y = e))
+
+# substitute does not follow parent pointers
+x <- 3; y <- 3
+e <- new.env(parent = globalenv())
+substitute(x + y, e)
+
+e <- new.env(parent = globalenv())
+e$x <- 2; e$y <- 3
+e2 <- new.env(parent = e)
+substitute(x + y, e2)
+#+END_SRC
+
+*** Substituting Expressions Held in Variables 
+
+A common case when you manipulate expressions is that you have a reference to an expression -- for example, from a function argument -- and you want to modify it. 
+
+In the global environment, you cannot directly do this with substitute. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+expr <- quote(x + y)
+substitute(expr)
+substitute(expr, list(expr = expr))
+
+# usually you manipulate expressions in a function
+f <- function() {
+    expr <- quote(x + y)
+    substitute(expr)
+}
+
+f()
+#+END_SRC
+
+When if you wish to do something like replace y with 2 here? 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# this won't work
+f <- function() {
+    expr <- quote(x + y)
+    y <- 2
+    substitute(expr)
+}
+f()
+
+f <- function() {
+    expr <- quote(x + y)
+    substitute(expr, list(y = 2))
+}
+f()
+
+# this will not work
+eval(substitute(substitute(expr, list(expr = expr)), list(y = 2)))
+
+# this will work. The order needs to be switched up
+eval(substitute(substitute(expr, list(y = 2)), list(expr = expr)))
+#+END_SRC
+
+*** Substituting Function Arguments 
+
+Function arguments are passed as unevaluated promises, but the second you access them, they get evaluated. If you want to get a hold of the promises without evaluating them, you can use the substitute function. This gives you the argument as a quoted expression. 
+
+This can be useful if you want to manipulate expressions or evaluate them in ways different from the norm, but you do throw away information about which context the expression was supposed to be evaluated in. 
+
+Consider: 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x) function(y = x) substitute(y)
+g <- f(2)
+g()
+
+x <- 4
+g()
+#+END_SRC
+
+Inside R there is no mechanism for getting the environment out of a promise, so you cannot write code that modifies input expressions and then evaluates them in the enclosing scope for default parameters and the calling scope for function arugments.
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# be careful when using substitute in functions that are called with other functions
+f <- function(expr) substitute(expr)
+f(x + y)
+
+g <- function(expr) f(expr)
+g(x + y)
+
+x <- 2; y <- 3
+eval(f(x + y))
+eval(g(x + y))
+#+END_SRC
+
+The substitute function is harder to use safely and correctly than using bquote and explicitly modifying call objects, but it is the function you need to use to implement nonstandard evaluation. 
+
+*** Nonstandard Evaluation 
+
+NSE refers to any evaluation that doesn't follow the rules for how you evaluate expressions in the local evaluation environment. Typical uses of NSE are evaluating expressions in the calling scope, and evaluating expressions in data frames. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+eval(quote(x + y), list(x = 2, y = 3))
+
+# since a df is a list of vectors of the same length, we can do the same in dfs
+d <- data.frame(x = 1:2, y = 3:3)
+eval(quote(x + y), d)
+#+END_SRC
+
+To do NSE, you have to explicitly substitute an argument, so you do not evaluate the argument-promise in the calling scope and then evaluate it in an alternative scope. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+my_with <- function(df, expr) {
+    eval(substitute(expr), df)
+}
+
+d <- data.frame(x = rnorm(5),
+                y = rnorm(5))
+
+my_with(d, x + y)
+#+END_SRC
+
+Here, the expression x + y is not quoted in the function call, so normally you'd expect x + y to evaluated in the calling scope. Because you explicitly use substitute to swap in the argument with my_with, this doesn't happen -- instead you evaluate the expression in the context of the data frame. This is NSE. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# if you use functions in the global scope, there is not a difference
+z <- 1
+with(d, x + y + z)
+my_with(d, x + y + z)
+
+# if you use them inside functions, there is
+f <- function(z) with(d, x + y + z)
+f(2)
+
+g <- function(z) my_with(d, x + y + z)
+g(2)
+#+END_SRC
+
+In my_with, there is a 3rd arg for the enclosing environment; the default here is the enclosing scope where eval is called. This is the global environment. In this case, z <- 1
+In with, the enclosing environment is the calling environment, so z <- 2
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# change my_with to mimic with behavior 
+my_with <- function(df, expr) {
+    eval(substitute(expr), df, parent.frame())
+}
+
+f <- function(z) with(d, x + y + z)
+f(2)
+
+g <- function(z) my_with(d, x + y + z)
+g(2)
+#+END_SRC
+
+Now we have both typical uses of NSE: evaluation in a data frame, and evaluation in the calling scope. 
+
+*** Nonstandard Evaluation from Inside Functions 
+
+Since substitutions tend to work verbatim on the function arguments that you give functions, once arguments get passed from one function to another, NSE gets tricky:
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+x <- 2; y <- 3
+f <- function(d, expr) my_with(d, expr)
+f(d, x + y)
+
+g <- function(d, expr) my_with(d, substitute(expr))
+g(d, x + y)
+#+END_SRC
+
+If you want functions that do NSE, you should write functions that work with expressions and do normal evaluation on those instead. You can make a version of my_with that expects the expression to be already quoted, which you can use in other functions
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+my_with_q <- function(df, expr) {
+    eval(expr, df, parent.frame())
+}
+
+my_with <- function(df, expr) {
+    my_with_q(d, substitute(expr))
+}
+
+g <- function(d, expr) my_with_q(d, substitute(expr))
+g(d, x + y)
+
+my_with(d, x + y)
+#+END_SRC
+
+*** Writing Macros with NSE 
+
+Since NSE allows you to evaluate expressions in the calling scope, you can use it to write macros -- functions that work as shortcuts for statements where they are called. These differ from functions, which cannot generally modify data outside of their own scope. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# extract names from a list of function parameters and make sure all params have a name 
+make_param_names <- function(params) {
+    param_names <- names(params)
+    if (is.null(param_names)) param_names <- rep("", length(params))
+    for (i in seq_along(param_names)) {
+        if (param_names[i] == "") {
+            param_names[i] <- paste(params[[i]])
+        }
+    }
+    param_names
+}
+
+make_macro <- function(..., body) {
+    params <- eval(substitute(alist(...)))
+    body <- substitute(body)
+
+    # construct macro
+    f <- eval(substitute(function() eval(substitute(body), parent.frame())))
+
+    # set macro arguments
+    param_names <- make_param_names(params)
+    names(params) <- param_names
+    params <- as.list(params)
+    formals(f) <- params
+    f
+}
+
+(m <- make_macro(body = x + y))
+
+# when m is called, it will eval x + y in calling scope
+x <- 2; y <- 4
+m()
+
+# macro to replace specific values in a column in a dataframe with NA 
+set_NA_val <- make_macro(df, var, na_val,
+                         body = df$var[df$var == na_val] <- NA)
+
+(d <- data.frame(x = c(1, -9, 3, 4),
+                 y = c(1, 2, -9, -9)))
+
+set_NA_val(d, x, -9)
+d
+
+set_NA_val(d, y, -9)
+d
+
+# more traditional R approach
+set_NA_val_fun <- function(df, var, na_val) {
+    df[df[, var] == na_val, var] <- NA
+    df
+}
+
+(d <- set_NA_val_fun(d, "x", -9))
+(d <- set_NA_val_fun(d, "y", -9))
+
+# or with magrittr
+library(magrittr)
+
+(d %>%
+    set_NA_val_fun("x", -9) %>%
+    set_NA_val_fun("y", -9))
+#+END_SRC
+
+*** Modifying Environments in Evaluations 
+
+The reason you can modify variables in macros is that you can modify environments. Actual values are immutable, but when you modify the data frame in the previous example, you are replacing the reference in the environment to the modified data. 
+
+Even with macros, you cannot actually modify data, but you can modify environments, and because you can evaluate expressions in environments different from the current evaluating environment you can make it appear as if you are modifying data in the calling environment. 
+
+You can see this by examining the evaluation environment explicitly when you evaluate an assignment. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# modify e by setting z
+e <- list2env(list(x = 2, y = 3))
+eval(quote(z <- x + y), e)
+as.list(e)
+
+# only envs you can modify in lists; when eval an assignment in a list, you cannot modify the actual list
+l <- list(x = 2, y = 3)
+eval(quote(z <- x + y), l)
+l
+#+END_SRC
+
+*** Accessing Promises Using the pryr Package
+
+There is no mechanism in pure R to get access to the internals of promises, so if you use substitute to translate a function arg into its corresponding expression, you lose information about which environment the expression should be evaluated in. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+library(pryr)
+
+f <- function(x, y) function(z = x + y) promise_info(z)
+g <- f(2, 3)
+g()
+
+g(x + y)
+
+# see diff before / after eval
+g <- function(x) {
+    cat("---Before Eval---\n")
+    print(promise_info(x))
+    force(x)
+    cat("---After Eval---\n")
+    promise_info(x)
+}
+
+# after: rm env and calc value
+g(x + y)
+#+END_SRC
+
+You can use the promise info to modify an environment and still evaluate it in the right scope. You just need to get hold of the code
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# two ways
+eval(substitute(substitute(code, list(y = quote(2 * y))),
+                list(code = pi$code)))
+
+eval(substitute(substitute(expr, list(y = quote(2 * y)))))
+#+END_SRC
+
+where expr is the parameter that holds the promise, and pi is the result of calling promise_info(expr). 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x, y) function(expr = x + y) {
+    pi <- promise_info(expr)
+    expr <- eval(substitute(substitute(expr, list(y = quote(2 * y)))))
+    value <- eval(expr, pi$env)
+    list(expr = expr,
+         value = value)
+}
+
+g <- f(2, 2)
+g()
+
+g(x + y)
+
+z <- 4
+g(z)
+#+END_SRC
+
+Suppose you wanted to substitute whatever y is in the input expression with the y you have in the enclosing scope: 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+f <- function(x, y) function(expr = x + y) {
+    pi <- promise_info(expr)
+    expr <- eval(substitute(substitute(expr, list(y = 2 * y))))
+    value <- eval(expr, pi$env)
+    list(expr = expr, value = value)
+}
+
+g <- f(2, 2)
+g()
+
+x <- y <- 4
+g(x + y)
+
+z <- 4
+g(z)
+#+END_SRC
+
