@@ -989,4 +989,171 @@ simplify_expr <- function(expr) {
     else stop(paste0("Unexpected expression ", deparse(expr), " in simplifying"))
 }
 
+simplify_call <- function(expr) {
+    if (is.name(expr[[1]])) {
+        # addition
+        if (expr[[1]] == as.name("+")) return(simplify_addition(expr[[2]], expr[[3]]))
+        # subtraction
+        if (expr[[1]] == as.name("-")) {
+            if (length(expr) == 2)
+                return(simplify_unary_subtraction(expr[[2]]))
+            else return(simplify_subtraction(expr[[2]], expr[[3]]))
+        }
+        # multiplication
+        if (expr[[1]] == as.name("*"))
+            return(simplify_multiplication(expr[[2]], expr[[3]]))
+        # division
+        if (expr[[1]] == as.name("/"))
+            return(simplify_division(expr[[2]], expr[[3]]))
+        # exponentiation
+        if (expr[[1]] == as.name("^"))
+            return(simplify_exponentiation(expr[[2]], expr[[3]]))
+        # parentheses
+        if (expr[[1]] == as.name("(")) {
+            subexpr <- simplify_expr(expr[[2]])
+            if (is.atomic(subexpr) || is.name(subexpr)) return(subexpr)
+            else if (is.call(subexpr) && subexpr[[1]] == as.name("(")) return(subexpr)
+            else return(call("(", subexpr))
+        }}
+    simplify_function_call(expr)
+}
+#+END_SRC
+
+You must compare the call names with name objects, since they are of the type name, not character. Also subtraction comes in two flavors: binary subtraction and unary negation; we can tell these apart by the number of args. Also parentheses are also calls, so they must be handled. 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+# handle each operator in turn
+simplify_addition <- function(f, g) {
+    left <- simplify_expr(f)
+    right <- simplify_expr(g)
+
+    if (left == 0) return(right)
+    if (right == 0) return(left)
+    if (is.numeric(right) && is.numeric(right)) return(left + right)
+    call("+", left, right)
+}
+
+simplify_addition(quote("2"), quote("6"))
+simplify_addition(quote(2), quote("6"))
+simplify_addition(quote(2), quote(6))
+
+simplify_unary_subtraction <- function(f) {
+    simplified <- simplify_expr(f)
+    if (is.numeric(simplified)) -simplified
+    else if (is.call(simplified) && simplified[[1]] == "-")
+        simplified[[2]]
+    # bquote subs a value where you put .(...) -> quote(-simplified)
+    else bquote(-.(simplified))
+}
+
+simplify_unary_subtraction(quote(-5))
+simplify_unary_subtraction(quote("5"))
+simplify_unary_subtraction(quote(-"5"))
+
+simplify_subtraction <- function(f, g) {
+    left <- simplify_expr(f); right <- simplify_expr(g)
+    if (left == 0) {
+        if (is.numeric(right)) return(-right)
+        else return(bquote(-.(right)))
+    }
+    if (right == 0) return(left)
+    if (is.numeric(left) && is.numeric(right)) return(left - right)
+    call("-", left, right)
+}
+
+simplify_subtraction(quote(-5), quote("-5"))
+
+simplify_multiplication <- function(f, g) {
+    left <- simplify_expr(f); right <- simplify_expr(g)
+    if (left == 0 || right == 0) return(0)
+    if (left == 1) return(right)
+    if (right == 1) return(left)
+    if (is.numeric(left) && is.numeric(right)) return(left * right)
+    call("*", left, right)
+}
+
+simplify_division <- function(f, g) {
+    left <- simplify_expr(f); right <- simplify_expr(g)
+    if (right == 1) return(left)
+    if (is.numeric(left) && is.numeric(right)) return(left / right)
+    call("/", left, right)
+}
+
+simplify_exponentiation <- function(f, g) {
+    left <- simplify_expr(f); right <- simplify_expr(g)
+    if (right == 0) return(1)
+    if (left == 0) return(0)
+    if (left == 1) return(1)
+    if (right == 1) return(left)
+    if (is.numeric(left) && is.numeric(right)) return(left ^ right)
+    call("^", left, right)
+}
+
+simplify_function_call <- function(expr) {
+    function_name <- expr[[1]]
+    arguments <- vector("list", length(expr) - 1)
+    for (i in seq_along(arguments)) {
+        arguments[i] <- list(simplify_expr(expr[[i + 1]]))
+    }
+
+    if (all(unlist(Map(is.numeric, arguments)))) {
+        if (as.character(function_name) %in% c("sin", "cos", "exp", "log")) {
+            result <- do.call(as.character(function_name), arguments)
+            return(result)
+        }
+    }
+    as.call(c(list(function_name), arguments))
+}
+
+simplify_expr(quote(2 * (0 + ((4 + 5) * x) * 1)))
+
+f <- function(x, y) x
+exp1 <- quote(f(x = 2, y = 1))
+exp2 <- quote(f(y = 2, x = 1))
+
+eval(exp1)
+eval(exp2)
+
+simplify_expr(exp1)
+simplify_expr(exp2)
+
+eval(simplify_expr(exp1))
+eval(simplify_expr(exp2))
+#+END_SRC
+
+*** Automatic Differentiation 
+
+#+BEGIN_SRC R :post round-tbl[:colnames yes](*this*)
+d <- function(f, x) {
+    if (is.null(body(f))) {
+        if (identical(f, sin)) return(cos)
+        if (identical(f, cos)) return(- sin(x))
+        if (identical(f, exp)) return(exp)
+        stop("Unknown primitive")
+    } else {
+        df <- f
+        e <- environment(f)
+        body(df) <- simplify_expr(diff_expr(body(f), x, e))
+        df
+    }
+}
+
+diff_expr <- function(expr, x, e) {
+    if (is.numeric(expr)) quote(0)
+    else if (is.name(expr)) {
+        if (expr == x) quote(1)
+        else quote(0)
+    } else if (is.call(expr)) diff_call(expr, x, e)
+    else stop(paste0("Unexpected expression ", deparse(expr), "in parsing."))
+}
+
+.built_in_functions <- c("sin", "cos", "exp")
+
+diff_call <- function(expr, x, e) {
+    if (is.name(expr[[1]])) {
+        if (expr[[1]] == as.name("+"))
+            return(diff_addition(expr[[2]], expr[[3]], x, e))
+        if (expr[[1]])
+    }
+
 #+END_SRC
